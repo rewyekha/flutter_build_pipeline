@@ -1,207 +1,351 @@
+# ============================================================================
+# FLUTTER MULTI-PLATFORM BUILD PIPELINE
+# ============================================================================
+# This pipeline builds Flutter applications for Android, iOS, and Windows
+# platforms in parallel stages. Each stage is independent and can be configured
+# separately based on platform-specific requirements.
+#
+# PREREQUISITES:
+# - Flutter SDK will be auto-installed by pipeline
+# - Secure files must be configured in Azure DevOps (Pipelines > Library > Secure files):
+#   * Android: key.properties, key.jks
+#   * iOS: iosKey (certificate), ios_Profile.mobileprovision (provisioning profile)
+# - Project must have valid pubspec.yaml and platform-specific configurations
+# ============================================================================
+
 trigger:
   - master
 
 stages:
+# ============================================================================
+# STAGE 1: ANDROID BUILD
+# ============================================================================
+# Builds signed AAB (Android App Bundle) for Play Store distribution
+# Requires: Signed keystore (key.jks) and key.properties configuration
+# Output: AAB artifact published to build artifacts
 - stage: AndroidStage
   pool:
-    vmImage: 'ubuntu-latest'
-  dependsOn: []
+    vmImage: 'ubuntu-latest'  # Ubuntu required for Android SDK tools
+  dependsOn: []  # No dependencies; runs in parallel with other stages
   displayName: Android
   jobs:
 
   - job: AndroidJob
-    displayName: Android
+    displayName: Android Build & Test
     steps: 
 
-    # replace "key.properties" with your secure file name
+    # ========================================================================
+    # Step 1-2: Download signing credentials from secure vault
+    # NOTE: Secure file names must match exactly what's configured in Azure DevOps
+    # Mismatch will cause pipeline failure with 'secure file not found' error
+    # ========================================================================
     - task: DownloadSecureFile@1
       name: keyprop
-      displayName: Download key properties file
+      displayName: Download Android keystore properties
       inputs:
-        secureFile: 'key.properties' 
+        secureFile: 'key.properties'  # Configure in Pipelines > Library > Secure files
 
-    # replace "key.jks" with your secure file name
     - task: DownloadSecureFile@1
       name: key
-      displayName: Download signing key
+      displayName: Download Android signing keystore
       inputs:
-        secureFile: 'key.jks'
+        secureFile: 'key.jks'  # JKS keystore for APK/AAB signing
 
-    # adjust paths and file names here
+    # ========================================================================
+    # Step 3: Copy signing files to correct Android build directories
+    # CRITICAL: Paths must match android/build.gradle expectations
+    # Error if files not found: gradle build will fail during signing phase
+    # ========================================================================
     - task: Bash@3
-      displayName: Copy config files
+      displayName: Copy signing credentials to build directories
       inputs:
         targetType: 'inline'
         script: |
+          # key.properties: Contains keystore alias, password, and path info
           cp $(keyprop.secureFilePath) $(Build.SourcesDirectory)/android/key.properties
+          # key.jks: Binary signing certificate
           cp $(key.secureFilePath) $(Build.SourcesDirectory)/android/app/key.jks
           
-          echo "key.properties copied to $(Build.SourcesDirectory)/android/key.properties"
-          echo "key.jks copied to $(Build.SourcesDirectory)/android/app/key.jks"
+          # Verify files were copied successfully
+          echo "✓ key.properties copied to android/key.properties"
+          echo "✓ key.jks copied to android/app/key.jks"
+          ls -lah $(Build.SourcesDirectory)/android/key.properties
+          ls -lah $(Build.SourcesDirectory)/android/app/key.jks
 
+    # ========================================================================
+    # Step 4: Install Flutter SDK
+    # Latest stable channel; auto mode installs dependencies (JDK, Android SDK)
+    # ========================================================================
     - task: FlutterInstall@0
-      displayName: "Install Flutter SDK"
+      displayName: Install Flutter SDK (stable channel)
       inputs:
-        mode: 'auto'
-        channel: 'stable'
-        version: 'latest'
+        mode: 'auto'  # Auto-installs required dependencies
+        channel: 'stable'  # Use stable, avoid beta/dev in CI/CD
+        version: 'latest'  # Latest stable version
 
+    # ========================================================================
+    # Step 5: Verify Flutter environment
+    # Diagnostic check ensures all build tools are correctly installed
+    # Failures here indicate missing JDK, Android SDK, or other dependencies
+    # ========================================================================
     - task: FlutterCommand@0
-      displayName: "Run Flutter diagnostics"
+      displayName: Verify Flutter environment (flutter doctor)
       inputs:
         projectDirectory: '.'
-        arguments: 'doctor -v'
+        arguments: 'doctor -v'  # Verbose output helps diagnose issues
 
+    # ========================================================================
+    # Step 6: Build Android App Bundle (AAB)
+    # AAB is required for Play Store distribution (not standalone APK)
+    # Output: build/app/outputs/bundle/release/app-release.aab
+    # Requires: Signing credentials from steps 1-3
+    # ========================================================================
     - task: FlutterBuild@0
-      displayName: "Build application"
+      displayName: Build Android App Bundle (AAB) for Play Store
       inputs:
-        target: 'aab'
+        target: 'aab'  # AAB format required by Google Play; auto-signs if key.properties configured
         projectDirectory: '$(Build.SourcesDirectory)'
 
+    # ========================================================================
+    # Step 7: Run unit/widget tests
+    # Generates coverage report for quality metrics
+    # Failure will block artifact publishing (set continueOnError to override)
+    # ========================================================================
     - task: FlutterTest@0
-      displayName: "Run unit tests"
+      displayName: Execute unit and widget tests
       inputs:
-        generateCodeCoverageReport: true
+        generateCodeCoverageReport: true  # Produces lcov coverage reports
         projectDirectory: '$(Build.SourcesDirectory)'
 
+    # ========================================================================
+    # Step 8: Stage AAB for publishing
+    # Copies built artifact from build directory to staging for artifact upload
+    # Expected: app-release.aab in build/app/outputs/bundle/release/
+    # ========================================================================
     - task: CopyFiles@2
-      displayName: "Copy app to staging directory"
+      displayName: Copy AAB artifact to staging directory
       inputs:
         sourceFolder: '$(Agent.BuildDirectory)'
-        contents: '**/bundle/**'
+        contents: '**/bundle/**'  # Matches: build/app/outputs/bundle/release/*.aab
         targetFolder: '$(Build.StagingDirectory)'
-        flattenFolders: true
+        flattenFolders: true  # Removes nested directory structure
 
+    # ========================================================================
+    # Step 9: Publish AAB artifact
+    # Makes artifact available for download and deployment
+    # Can be downloaded from Build > Artifacts or integrated with Release pipelines
+    # ========================================================================
     - task: PublishBuildArtifacts@1
-      displayName: "Publish AAB file"
+      displayName: Publish AAB to pipeline artifacts
       inputs:
         PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'AAB'
-        publishLocation: 'Container'
+        ArtifactName: 'AAB'  # Artifact name in Azure DevOps UI
+        publishLocation: 'Container'  # Store in pipeline artifact container
 
+# ============================================================================
+# STAGE 2: iOS BUILD
+# ============================================================================
+# Builds signed IPA (iOS App Package) for App Store distribution
+# Requires: Valid Apple Developer certificate and provisioning profile
+# Output: IPA artifact published to build artifacts
+# Note: macOS runner required for Xcode and iOS build tools
 - stage: iOSStage
   pool: 
-    vmImage: 'macos-latest'
-  dependsOn: []
+    vmImage: 'macos-latest'  # REQUIRED: macOS for Xcode/iOS SDK
+  dependsOn: []  # No dependencies; runs in parallel with other stages
   displayName: iOS
   jobs:
  
   - job: iOSJob
-    displayName: iOS
+    displayName: iOS Build & Test
     steps: 
-          
-    # replace "iosKey" and "yourPwd" with your secure file name and password
-    - task: InstallAppleCertificate@2
-      displayName: Install certificate
-      inputs:
-        certSecureFile: 'iosKey'
-        certPwd: 'yourPwd'
-        keychain: 'temp'
     
-    # replace "ios_Profile.mobileprovision" with your secure file name
+    # ========================================================================
+    # Step 1-2: Install iOS signing credentials
+    # CRITICAL: Certificate must be .p12 format; password must match exactly
+    # Wrong password will cause code signing failure during build
+    # Keychain 'temp' is session-based; automatically cleaned up after build
+    # ========================================================================
+    - task: InstallAppleCertificate@2
+      displayName: Install Apple Developer certificate (.p12)
+      inputs:
+        certSecureFile: 'iosKey'  # Configure in Pipelines > Library > Secure files (must be .p12)
+        certPwd: 'yourPwd'  # Password to unlock .p12 certificate (store in Secure variable)
+        keychain: 'temp'  # Temporary keychain; cleaned up after build
+    
+    # ========================================================================
+    # Step 3: Install provisioning profile
+    # Profile enables code signing and specifies allowed device UDIDs
+    # Must match certificate and bundle identifier in Xcode project
+    # ========================================================================
     - task: InstallAppleProvisioningProfile@1
-      displayName: Install provisioning file
+      displayName: Install Apple provisioning profile (.mobileprovision)
       inputs:
-        provisioningProfileLocation: 'secureFiles'
-        provProfileSecureFile: 'ios_Profile.mobileprovision'
+        provisioningProfileLocation: 'secureFiles'  # Source location
+        provProfileSecureFile: 'ios_Profile.mobileprovision'  # Configure in Secure files
         
+    # ========================================================================
+    # Step 4: Install Flutter SDK on macOS
+    # Auto mode installs Xcode dependencies and iOS build tools
+    # ========================================================================
     - task: FlutterInstall@0
-      displayName: "Install Flutter SDK"
+      displayName: Install Flutter SDK (stable channel)
       inputs:
-        mode: 'auto'
+        mode: 'auto'  # Auto-installs iOS SDK and CocoaPods dependencies
         channel: 'stable'
         version: 'latest'
 
+    # ========================================================================
+    # Step 5: Verify iOS build environment
+    # Checks Xcode, iOS SDK, CocoaPods, and Flutter compatibility
+    # Common issues: Xcode version mismatch, missing provisioning profile
+    # ========================================================================
     - task: FlutterCommand@0
-      displayName: "Run Flutter diagnostics"
+      displayName: Verify iOS environment (flutter doctor)
       inputs:
         projectDirectory: '.'
         arguments: 'doctor -v'
 
-    # adjust path to the *.plist file
+    # ========================================================================
+    # Step 6: Build signed IPA for App Store
+    # Uses exportOptionsPlist to configure code signing and app delivery method
+    # Path must point to valid Xcode export configuration plist
+    # Output: build/ios/ipa/*.ipa (signed and ready for App Store upload)
+    # ========================================================================
     - task: FlutterBuild@0
-      displayName: "Build application"
+      displayName: Build signed iOS App (IPA) for App Store
       inputs:
-        target: ipa
+        target: ipa  # IPA format for App Store; auto-signs using certificate + provisioning profile
         projectDirectory: '$(Build.SourcesDirectory)'
-        exportOptionsPlist: 'ios/exportOptions.plist'
+        exportOptionsPlist: 'ios/exportOptions.plist'  # CRITICAL: Path to exportOptions.plist with code signing config
 
+    # ========================================================================
+    # Step 7: Run iOS tests
+    # Executes unit and widget tests on iOS platform
+    # ========================================================================
     - task: FlutterTest@0
-      displayName: "Run unit tests"
+      displayName: Execute unit and widget tests
       inputs:
         generateCodeCoverageReport: true
         projectDirectory: '$(Build.SourcesDirectory)'
 
+    # ========================================================================
+    # Step 8: Stage IPA for publishing
+    # Copies signed IPA from build output to staging directory
+    # Expected: *.ipa in build/ios/ipa/
+    # ========================================================================
     - task: CopyFiles@2
-      displayName: "Copy app to staging directory"
+      displayName: Copy IPA artifact to staging directory
       inputs:
         sourceFolder: '$(Agent.BuildDirectory)'
-        contents: '**/ipa/*.ipa'
+        contents: '**/ipa/*.ipa'  # Matches: build/ios/ipa/*.ipa
         targetFolder: '$(Build.StagingDirectory)'
         flattenFolders: true
 
+    # ========================================================================
+    # Step 9: Publish IPA artifact
+    # Makes signed IPA available for App Store upload or TestFlight distribution
+    # ========================================================================
     - task: PublishBuildArtifacts@1
-      displayName: "Publish IPA file"
+      displayName: Publish IPA to pipeline artifacts
       inputs:
         PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'IPA'
+        ArtifactName: 'IPA'  # Artifact name in Azure DevOps UI
         publishLocation: 'Container'
         
+# ============================================================================
+# STAGE 3: WINDOWS BUILD
+# ============================================================================
+# Builds MSIX (Microsoft Store) package for Windows distribution
+# Requires: msix package configured in pubspec.yaml with signing details
+# Output: MSIX artifact for Windows app store or direct installation
 - stage: winStage
   pool: 
-    vmImage: 'windows-latest'
-  dependsOn: []
+    vmImage: 'windows-latest'  # Windows runner required for Visual Studio/MSIX tools
+  dependsOn: []  # No dependencies; runs in parallel with other stages
   displayName: Windows
   jobs:
  
   - job: windowsJob
-    displayName: Windows
+    displayName: Windows Build & Test
     steps: 
-        
+    
+    # ========================================================================
+    # Step 1: Install Flutter SDK on Windows
+    # Auto mode installs Visual Studio buildtools and Windows SDK dependencies
+    # ========================================================================
     - task: FlutterInstall@0
-      displayName: "Install Flutter SDK"
+      displayName: Install Flutter SDK (stable channel)
       inputs:
-        mode: 'auto'
+        mode: 'auto'  # Auto-installs Visual Studio build tools, Windows SDK, CMake
         channel: 'stable'
         version: 'latest'
     
+    # ========================================================================
+    # Step 2: Verify Windows build environment
+    # Checks Visual Studio, Windows SDK, CMake, and build tool installation
+    # ========================================================================
     - task: FlutterCommand@0
-      displayName: "Run Flutter diagnostics"
+      displayName: Verify Windows environment (flutter doctor)
       inputs:
         projectDirectory: '.'
         arguments: 'doctor -v'
 
+    # ========================================================================
+    # Step 3: Build Windows desktop application
+    # Compiles native Windows code and Flutter widgets
+    # Output: build/windows/x64/runner/Release/ (binary executable)
+    # ========================================================================
     - task: FlutterBuild@0
-      displayName: "Build application"
+      displayName: Build Windows desktop application
       inputs:
-        target: windows
+        target: windows  # Builds native Windows executable (x64)
         projectDirectory: '$(Build.SourcesDirectory)'
 
+    # ========================================================================
+    # Step 4: Run Windows tests
+    # Executes unit and widget tests on Windows platform
+    # ========================================================================
     - task: FlutterTest@0
-      displayName: "Run unit tests"
+      displayName: Execute unit and widget tests
       inputs:
         generateCodeCoverageReport: true
         projectDirectory: '$(Build.SourcesDirectory)'
 
-    # install package msix -> https://pub.dev/packages/msix
-    # provide signing information in pubspec.yaml -> see https://github.com/YehudaKremer/msix/tree/main/example#without-signing
+    # ========================================================================
+    # Step 5: Create MSIX installer package
+    # Converts Windows executable into MSIX format for Microsoft Store
+    # PREREQUISITE: Add 'msix' package to pubspec.yaml dependencies
+    # CONFIGURATION: Configure signing in pubspec.yaml (msix section)
+    # Reference: https://pub.dev/packages/msix
+    # Note: --build-windows false skips rebuild (already done in step 3)
+    # ========================================================================
     - task: FlutterCommand@0
-      displayName: "Create MSIX file"
+      displayName: Create MSIX installer package
       inputs:
         projectDirectory: '$(Build.SourcesDirectory)'
-        arguments: 'pub run msix:create --build-windows false'
+        arguments: 'pub run msix:create --build-windows false'  # Create MSIX from pre-built Windows binary
 
+    # ========================================================================
+    # Step 6: Stage MSIX for publishing
+    # Copies generated MSIX file to staging directory for artifact upload
+    # Expected: *.msix in build/windows/x64/runner/Release/
+    # ========================================================================
     - task: CopyFiles@2
-      displayName: "Copy app to staging directory"
+      displayName: Copy MSIX artifact to staging directory
       inputs:
         sourceFolder: '$(Agent.BuildDirectory)'
-        contents: '**/*.msix'
+        contents: '**/*.msix'  # Matches: **/*.msix (MSIX installer file)
         targetFolder: '$(Build.StagingDirectory)'
         flattenFolders: true
 
+    # ========================================================================
+    # Step 7: Publish MSIX artifact
+    # Makes MSIX package available for Microsoft Store submission or testing
+    # ========================================================================
     - task: PublishBuildArtifacts@1
-      displayName: "Publish MSIX"
+      displayName: Publish MSIX to pipeline artifacts
       inputs:
         PathtoPublish: '$(Build.ArtifactStagingDirectory)'
-        ArtifactName: 'Windows'
+        ArtifactName: 'Windows'  # Artifact name in Azure DevOps UI
         publishLocation: 'Container'
