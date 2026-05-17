@@ -17,6 +17,4 @@ The repository contains a build pipeline in a YAML file that can be integrated i
 
 ## About me
 
-- Follow me on [Medium](https://xeladu.medium.com)
-- Visit my [Portfolio](https://reyaskhan.tech)
-- Check out my [digital products](https://xeladu.gumroad.com)
+- Visit my [Portfolio](https://reyaskhan.me)
