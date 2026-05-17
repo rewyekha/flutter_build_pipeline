@@ -1,0 +1,37 @@
+parameters:
+  - name: target
+    type: string
+  - name: projectDirectory
+    type: string
+    default: '$(Build.SourcesDirectory)'
+  - name: exportOptionsPlist
+    type: string
+    default: ''
+
+steps:
+- task: FlutterInstall@0
+  displayName: Install Flutter SDK (stable channel)
+  inputs:
+    mode: 'auto'
+    channel: 'stable'
+    version: 'latest'
+
+- task: FlutterCommand@0
+  displayName: Verify Flutter environment (flutter doctor)
+  inputs:
+    projectDirectory: '.'
+    arguments: 'doctor -v'
+
+- task: FlutterBuild@0
+  displayName: Build Flutter App (${{ parameters.target }})
+  inputs:
+    target: ${{ parameters.target }}
+    projectDirectory: ${{ parameters.projectDirectory }}
+    ${{ if ne(parameters.exportOptionsPlist, '') }}:
+      exportOptionsPlist: ${{ parameters.exportOptionsPlist }}
+
+- task: FlutterTest@0
+  displayName: Execute unit and widget tests
+  inputs:
+    generateCodeCoverageReport: true
+    projectDirectory: ${{ parameters.projectDirectory }}
