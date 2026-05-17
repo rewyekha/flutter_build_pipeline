@@ -1,3 +1,8 @@
+# How to use the yamls:
+
+[Use this yaml for setup(reusable)](https://github.com/rewyekha/flutter_build_pipeline/blob/main/setup-flutter.yml)<br/>
+[Use this yaml for cross-platform build - sign - release](https://github.com/rewyekha/flutter_build_pipeline/blob/main/azure-pipeline.yml)
+
 # Sources
 
 [Build Flutter apps for iOS, Android, and Windows with Azure DevOps on QuickCoder](https://quickcoder.org/flutter_build_pipeline/)<br/>
